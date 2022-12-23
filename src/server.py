@@ -7,7 +7,7 @@ app = Flask(__name__)
 player = QPlayer(checkpoints_dir='.')
 player.load('best_model-5-layers-750-latent-dim-False-doubles')
 
-@app.route('/')
+@app.route('/play')
 def hello():
     body = request.json
     state = body['state']
