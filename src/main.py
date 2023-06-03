@@ -11,6 +11,15 @@ from datetime import datetime
 import os
 import numpy as np
 
+device = t.device('cpu')
+print(f'#CPUs: {os.cpu_count()}')
+if t.cuda.is_available():
+    device = t.device('cuda:0')
+    info = t.cuda.get_device_properties(0)
+    print(f'GPU: {info.name} (vram={info.total_memory}) (units={info.multi_processor_count})')
+else:
+    print('NO GPU')
+
 device = t.device("cuda:1" if t.cuda.is_available() else "cpu")
 
 hyper_params = dict(
