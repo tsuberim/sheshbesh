@@ -8,6 +8,16 @@ from datetime import datetime
 from tqdm import tqdm
 import pickle
 
+hyper_params = dict(
+    n_layers=8,
+    latent_dim=3000,
+    max_examples=100000,
+    batch_size=60000,
+    time_limit=400,
+    lr=1e-2,
+    n_parallel_games=2,
+)
+
 t.set_default_dtype(t.float32)
 
 device = t.device('cpu')
@@ -23,7 +33,7 @@ else:
     print('NO GPU')
 
 class ResSequential(nn.Module):
-    def __init__(self, n_layers=10, latent_dim=1100, out_dim=1, checkpoints_dir='./checkpoints'):
+    def __init__(self, n_layers=hyper_params['n_layers'], latent_dim=hyper_params['latent_dim'], out_dim=1, checkpoints_dir='./checkpoints'):
         super(ResSequential, self).__init__()
         self.layers = nn.ModuleList([nn.LazyLinear(latent_dim) for _ in range(n_layers)])
         self.final_layer = nn.LazyLinear(out_dim)
@@ -113,7 +123,7 @@ def returns(rews, discount=1-1e-4):
     return t.cumsum(rews.flip(0), 0).flip(0) / discounts
 
 class Memory:
-    def __init__(self, max_examples=1000000):
+    def __init__(self, max_examples=hyper_params['max_examples']):
         self.examples = []
         self.max_examples = max_examples
 
@@ -125,7 +135,7 @@ class Memory:
         with open('memory', 'rb') as handle:
             self.examples = pickle.load(handle)
 
-    def sample(self, n=100000):
+    def sample(self, n=hyper_params['batch_size']):
         batch = choices(self.examples, k=n)
         inputs = t.stack([input for input, _ in batch])
         targets = t.stack([target for _, target in batch])
@@ -217,11 +227,9 @@ def safe_play(game: Game):
     else:
         game.pass_move()
 
-def play(Q: ResSequential, n_parallel_games=64, n_total_games=100, benchmark_player=None, temperature=1, on_game_end=None) -> float:
-    time_limit = 400
+def play(Q: ResSequential, games, n_total_games=100, benchmark_player=None, temperature=1, on_game_end=None) -> float:
     opponent = benchmark_player.__name__ if benchmark_player else 'Self'
-    print(f'Playing {n_total_games} games ({n_parallel_games} in parallel) against {opponent} with temperature={temperature}')
-    games = [Game() for _ in range(n_parallel_games)]
+    print(f'Playing {n_total_games} games ({len(games)} in parallel) against {opponent} with temperature={temperature}')
     results = []
     
     with tqdm(total=n_total_games, unit='game', smoothing=0) as pbar:
@@ -264,7 +272,7 @@ def play(Q: ResSequential, n_parallel_games=64, n_total_games=100, benchmark_pla
 
             for i, game in enumerate(games):
                 win = winner(game.state)
-                if game.turn > time_limit or (win is not None):
+                if game.turn > hyper_params['time_limit'] or (win is not None):
                     results.append(win)
                     pbar.update(1)
                     if on_game_end is not None:
@@ -274,10 +282,10 @@ def play(Q: ResSequential, n_parallel_games=64, n_total_games=100, benchmark_pla
             step += 1
 
     results = list(filter(lambda x: x is not None, results))
-    return sum(results) / len(results)
+    return 0 if len(results) == 0 else sum(results) / len(results)
 
 def main():
-    lr = 1e-2
+    lr = hyper_params['lr']
     print(f'Learing rate = {lr}')
 
     Q = ResSequential()
@@ -290,14 +298,19 @@ def main():
     def on_game_end(game, win):
         game.add_examples(memory)
 
+    games = [
+        [Game() for _ in range(hyper_params['n_parallel_games'])]
+        for _ in range(4)
+    ]
+
     while True:
-        winrate = play(Q, n_parallel_games=16, n_total_games=64, on_game_end=on_game_end, temperature=0.15)
+        winrate = play(Q, games[0], n_total_games=hyper_params['n_parallel_games'], on_game_end=on_game_end, temperature=0.15)
         print(f'Winrate against self = {winrate}')
-        winrate = play(Q, n_parallel_games=16, n_total_games=32, on_game_end=on_game_end, temperature=0.01, benchmark_player=random_play)
+        winrate = play(Q, games[1], n_total_games=hyper_params['n_parallel_games'], on_game_end=on_game_end, temperature=0.01, benchmark_player=random_play)
         print(f'Winrate against random_player = {winrate}')
-        winrate = play(Q, n_parallel_games=16, n_total_games=32, on_game_end=on_game_end, temperature=0.01, benchmark_player=greedy_play)
+        winrate = play(Q, games[2], n_total_games=hyper_params['n_parallel_games'], on_game_end=on_game_end, temperature=0.01, benchmark_player=greedy_play)
         print(f'Winrate against greedy_player = {winrate}')
-        winrate = play(Q, n_parallel_games=16, n_total_games=32, on_game_end=on_game_end, temperature=0.01, benchmark_player=safe_play)
+        winrate = play(Q, games[3], n_total_games=hyper_params['n_parallel_games'], on_game_end=on_game_end, temperature=0.01, benchmark_player=safe_play)
         print(f'Winrate against safe_player = {winrate}')
 
         inputs, targets = memory.sample()
