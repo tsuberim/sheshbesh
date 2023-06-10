@@ -3,9 +3,9 @@ import torch as t
 from torch.utils.tensorboard import SummaryWriter
 import torch.nn as nn
 import torch.nn.functional as F
-from sheshbesh import initial_state, actions, can_step, step, end_turn, single_step_actions, to_str, winner, roll, house_is_full, flip_episode, flip_state, flip_seq
+from sheshbesh import initial_state, actions, can_step, step, end_turn, single_step_actions, to_str, winner, roll, house_is_full, flip_episode, flip_state, flip_seq, flip_action
 from timeit import timeit
-import ray
+# import ray
 from itertools import cycle
 from datetime import datetime
 import os
@@ -17,10 +17,11 @@ if t.cuda.is_available():
     device = t.device('cuda:0')
     info = t.cuda.get_device_properties(0)
     print(f'GPU: {info.name} (vram={info.total_memory}) (units={info.multi_processor_count})')
+elif hasattr(t.backends, "mps") and t.backends.mps.is_available():
+    device = t.device('mps')
+    print(f'Using Apple Metal')
 else:
     print('NO GPU')
-
-device = t.device("cuda:1" if t.cuda.is_available() else "cpu")
 
 hyper_params = dict(
     n_layers=5,
@@ -90,6 +91,11 @@ class QPlayer:
         print(f'Saved checkpoint: {latest}')
 
     def encode(self, state, act, avail_dice):
+        is_white = state[0]
+        if not is_white:
+            state = flip_state(state)
+            act = flip_action(act)
+
         [is_white, *board] = state
         (from_col, steps) = act
 
@@ -120,14 +126,12 @@ class QPlayer:
 
         return t.concat(vecs)
 
-    def evaluate_seqs(self, states, seqs, cuda=False):
+    def evaluate_seqs(self, seqs, cuda=False):
         state_acts = []
-        for (state, (seq, rew)) in zip(cycle(states), seqs):
-            s = state
+        for (seq, rew) in seqs:
             if seq is not None:
-                for (act, avail_dice) in seq:
+                for (s, act, avail_dice) in seq:
                     state_acts.append(self.encode(s, act, avail_dice))
-                    s, _ = step(s, act)
 
         state_act_evals = self.Q(t.stack(state_acts).cuda() if cuda else t.stack(state_acts))
 
@@ -153,7 +157,7 @@ class QPlayer:
         if len(seqs) == 0:
             return None
 
-        seq_evals = self.evaluate_seqs([state], seqs)
+        seq_evals = self.evaluate_seqs(seqs)
         seq = max(seq_evals, key=lambda seq: (seq[1], random()))[0]
 
         if not is_white:
@@ -211,7 +215,7 @@ class RandomPlayer:
         if len(seqs) == 0:
             return None
 
-        return choice(seqs)[0]
+        return choice(seqs)[1]
 
 
 class GreedyPlayer:
@@ -219,7 +223,7 @@ class GreedyPlayer:
         seqs = list(actions(state, dice, doubles=hyper_params['doubles']))
         if len(seqs) == 0:
             return None
-        return max(seqs, key=lambda seq: (seq[1], random()))[0]
+        return max(seqs, key=lambda seq: (seq[1], random()))[1]
 
 class MixPlayer:
     def __init__(self, p1, p2, alpha=0.5):
@@ -233,7 +237,47 @@ class MixPlayer:
         else:
             return self.p2.play(state, dice)
 
-@ray.remote
+ASDF = 1
+def parplay(q_player: QPlayer):
+    games = [
+        dict(state=initial_state, dice=roll())
+        for _
+        in range(16)
+    ]
+
+    while True:    
+        encodes = []
+        game_lens = []
+        for game in games:
+            seq_lens = []
+            for seq, rew, end_state in actions(game['state'], game['dice']):
+                for s,a,d in seq: 
+                    encodes.append(q_player.encode(s,a,d))
+                seq_lens.append((len(seq), end_state))
+            game_lens.append(seq_lens)
+            
+        print('step', datetime.now())
+        evals = q_player.Q.to(device)(t.stack(encodes).to(device)).flatten()
+
+        idx = 0
+        for (i, game) in enumerate(games):
+            asdf = []
+            for (seq_len, end_state) in game_lens[i]:
+                rew = t.tensor(0.0, device=device)
+                for _ in range(seq_len):
+                    rew += evals[idx]
+                    idx += 1
+                asdf.append((rew, end_state))
+
+            if len(asdf) > 0:
+                game['state'] = max(asdf, key=lambda seq: (seq[0], random()))[1]
+            if winner(game['state']) is not None:
+                game['state'] = initial_state
+            game['dice'] = roll()
+
+
+
+# @ray.remote
 def play(p1, p2, render=False):
     players = (p1, p2)
     episodes = ([], [])
@@ -296,49 +340,50 @@ def main():
     #     working_dir='src',
     #     pip=['torch', 'numpy', 'tensorboard']
     # ))
-    ray.init()
-    writer = SummaryWriter(comment=experiment)
+    # ray.init()
+    # writer = SummaryWriter(comment=experiment)
 
-    n_games = 30
-    n_players = 2
-    n_checkpoints = 1
-    n_learnings_per_batch = 3
+    # n_games = 30
+    # n_players = 2
+    # n_checkpoints = 1
+    # n_learnings_per_batch = 3
 
-    episodes_per_batch = 2*n_games*(n_players + n_checkpoints)
+    # episodes_per_batch = 2*n_games*(n_players + n_checkpoints)
 
-    mem = Memory(4*episodes_per_batch)
+    # mem = Memory(4*episodes_per_batch)
 
     random_player = RandomPlayer()
     greedy_player = GreedyPlayer()
     q_player = QPlayer()
     q_player.load_latest()
 
-    def play_against(player, name, n):
-        wr, eps1, eps2 = winrate(q_player, player, n=n)
-        writer.add_scalar(f'{experiment}/vs. {name}', wr, i)
-        print(f'{datetime.now().isoformat()} {i}) vs. {name} = {wr}')
-        for ep in eps1: mem.insert(ep)
-        for ep in eps2: mem.insert(flip_episode(ep))
+    # def play_against(player, name, n):
+    #     wr, eps1, eps2 = winrate(q_player, player, n=n)
+    #     writer.add_scalar(f'{experiment}/vs. {name}', wr, i)
+    #     print(f'{datetime.now().isoformat()} {i}) vs. {name} = {wr}')
+    #     for ep in eps1: mem.insert(ep)
+    #     for ep in eps2: mem.insert(flip_episode(ep))
 
     try:
-        i = 0
-        while True:
-            for alpha in np.linspace(.6,.8,n_players):
-                play_against(MixPlayer(greedy_player, random_player, alpha), f'{alpha*100}% greedy', n_games)
+        parplay(q_player)
+        # i = 0
+        # while True:
+        #     for alpha in np.linspace(.6,.8,n_players):
+        #         play_against(MixPlayer(greedy_player, random_player, alpha), f'{alpha*100}% greedy', n_games)
 
-            for checkpoint in q_player.get_checkpoints()[::-1][:n_checkpoints]:
-                checkpoint_player = QPlayer()
-                checkpoint_player.load(checkpoint)
-                play_against(checkpoint_player, checkpoint, n_games)
+        #     for checkpoint in q_player.get_checkpoints()[::-1][:n_checkpoints]:
+        #         checkpoint_player = QPlayer()
+        #         checkpoint_player.load(checkpoint)
+        #         play_against(checkpoint_player, checkpoint, n_games)
 
-            for _ in range(n_learnings_per_batch):
-                loss = q_player.learn(mem.sample(episodes_per_batch))
-                writer.add_scalar(f'{experiment}/loss', loss, i)
-                print(f'{datetime.now().isoformat()} {i}) loss = {loss}')
+        #     for _ in range(n_learnings_per_batch):
+        #         loss = q_player.learn(mem.sample(episodes_per_batch))
+        #         writer.add_scalar(f'{experiment}/loss', loss, i)
+        #         print(f'{datetime.now().isoformat()} {i}) loss = {loss}')
 
-            if i > 0 and i % 5 == 0:
-                q_player.save_checkpoint()
-            i += 1
+        #     if i > 0 and i % 5 == 0:
+        #         q_player.save_checkpoint()
+        #     i += 1
     except KeyboardInterrupt:
         q_player.save_checkpoint()
         os._exit(0)

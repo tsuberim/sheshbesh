@@ -113,47 +113,53 @@ def single_step_actions(state, steps):
     return ((from_col, steps) for from_col in range(len(board)) if can_step(state, (from_col, steps)))
 
 
-def actions(state, dice, doubles=True):
+from typing import Tuple, Generator, List
+State = object
+Action = Tuple[int, int]
+ActSeq = Tuple[State, Action, List[int]]
+Something = Tuple[ActSeq, float, State]
+
+def actions(state, dice, doubles=True) -> Generator[Something, None, None]:
     (x, y) = dice
 
     if x == y and doubles:
         for a1 in single_step_actions(state, x):
             s1, r1 = step(state, a1)
             if winner(s1) is not None:
-                yield ((a1, (x, x, x,)),), r1
+                yield ((state, a1, (x, x, x,)),), r1, s1
             else:
                 for a2 in single_step_actions(s1, x):
                     s2, r2 = step(s1, a2)
                     if winner(s1) is not None:
-                        yield ((a1, (x, x, x)), (a2, (x, x,))), r1 + r2
+                        yield ((state, a1, (x, x, x)), (s1, a2, (x, x,))), r1 + r2, s2
                     else:
                         for a3 in single_step_actions(s2, x):
                             s3, r3 = step(s2, a3)
                             if winner(s1) is not None:
-                                yield ((a1, (x, x, x)), (a2, (x, x)), (a3, (x,))), r1 + r2 + r3
+                                yield ((state, a1, (x, x, x)), (s1, a2, (x, x)), (s2, a3, (x,))), r1 + r2 + r3, s3
                             else:
                                 for a4 in single_step_actions(s3, x):
                                     s4, r4 = step(s3, a4)
-                                    yield ((a1, (x, x, x)), (a2, (x, x)), (a3, (x,)), (a4, ())), r1 + r2 + r3 + r4
+                                    yield ((state, a1, (x, x, x)), (s1, a2, (x, x)), (s2, a3, (x,)), (s3, a4, ())), r1 + r2 + r3 + r4, s4
 
     else:
         for act1 in single_step_actions(state, x):
             s1, r1 = step(state, act1)
             if winner(s1) is not None:
-                yield ((act1, (y,)),), r1
+                yield ((state, act1, (y,)),), r1, s1
             else:
                 for act2 in single_step_actions(s1, y):
                     s2, r2 = step(s1, act2)
-                    yield ((act1, (y,)), (act2, ())), r1 + r2
+                    yield ((state, act1, (y,)), (s1, act2, ())), r1 + r2, s2
 
         for act1 in single_step_actions(state, y):
             s1, r1 = step(state, act1)
             if winner(s1) is not None:
-                yield ((act1, (x,)),), r1
+                yield ((state, act1, (x,)),), r1, s1
             else:
                 for act2 in single_step_actions(s1, x):
                     s2, r2 = step(s1, act2)
-                    yield ((act1, (x,)), (act2, ())), r1 + r2
+                    yield ((state, act1, (x,)), (s1, act2, ())), r1 + r2, s2
 
 
 def to_str(state):
@@ -185,3 +191,8 @@ def to_str(state):
 
 def roll():
     return (randrange(1, 6), randrange(1, 6))
+
+def n_open_houses(state):
+    [is_white, *board] = state
+    s = 1 if is_white else -1
+    return sum([i == s for i in board[1:-1]])
