@@ -122,6 +122,9 @@ def returns(rews, discount=1-1e-4):
 
     return t.cumsum(rews.flip(0), 0).flip(0) / discounts
 
+def normalize(x):
+    return (x - x.mean()) / (x.std() + 1e-10)
+
 class Memory:
     def __init__(self, max_examples=hyper_params['max_examples']):
         self.examples = []
@@ -314,6 +317,7 @@ def main():
         print(f'Winrate against safe_player = {winrate}')
 
         inputs, targets = memory.sample()
+        targets = normalize(targets)
         evals = Q(inputs.to(device)).flatten()
         loss = loss_fn(evals, targets.to(device))
         Q.zero_grad()
