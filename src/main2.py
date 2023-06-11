@@ -265,6 +265,7 @@ def play(Q: ResSequential, games, n_total_games=100, benchmark_player=None, temp
 
                         # choose a sequence
                         probs = F.softmax(predicted_rewards / temperature, dim=0)
+                        # print('probs', probs)
                         chosen_idx = t.distributions.categorical.Categorical(probs=probs).sample()
                         game.choose(chosen_idx)
                     else:
@@ -307,7 +308,7 @@ def main():
     ]
 
     while True:
-        winrate = play(Q, games[0], n_total_games=hyper_params['n_parallel_games'], on_game_end=on_game_end, temperature=0.15)
+        winrate = play(Q, games[0], n_total_games=hyper_params['n_parallel_games'], on_game_end=on_game_end, temperature=0.02)
         print(f'Winrate against self = {winrate}')
         winrate = play(Q, games[1], n_total_games=hyper_params['n_parallel_games'], on_game_end=on_game_end, temperature=0.01, benchmark_player=random_play)
         print(f'Winrate against random_player = {winrate}')
