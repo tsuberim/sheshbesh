@@ -40,9 +40,9 @@ class ResSequential(nn.Module):
         self.checkpoints_dir = f'{checkpoints_dir}/n_layers={n_layers}-latent_dim={latent_dim}'
 
     def forward(self, data):
-        data = F.relu(self.layers[0](data))
+        data = F.leaky_relu(self.layers[0](data))
         for layer in self.layers[1:]:
-            data = F.relu(layer(data) + data)
+            data = F.leaky_relu(layer(data) + data)
         return self.final_layer(data)
 
     def save(self, path):
@@ -139,7 +139,7 @@ class Memory:
             self.examples = pickle.load(handle)
 
     def sample(self, n=hyper_params['batch_size']):
-        batch = choices(self.examples, k=n)
+        batch = choices(self.examples, k=min(n, len(self.examples)))
         inputs = t.stack([input for input, _ in batch])
         targets = t.stack([target for _, target in batch])
 
